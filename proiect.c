@@ -248,6 +248,8 @@ void scrieInformatiiInFisier(const char *numeFisier, const char *informatii) {
     fclose(fisier);
 }
 
+/*saptamana 7*/
+
 
 void DirectorSiScrieStatistica(const char *caleDirector) {
     DIR *director = opendir(caleDirector);
