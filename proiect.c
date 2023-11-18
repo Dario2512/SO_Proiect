@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -149,7 +150,7 @@ char* timespecToData(const struct timespec *ts) {
     }
 
     struct tm lt;
-    if (localtime_s(&(ts->tv_sec), &lt) == NULL) {
+    if (localtime_r(&(ts->tv_sec), &lt) == NULL) {
         free(dataStr);
         return NULL;
     }
@@ -235,3 +236,77 @@ void scrieDataInFisier(const char *numeFisier, const char *data) {
     close(fd);
 }
 
+void scrieInformatiiInFisier(const char *numeFisier, const char *informatii) {
+    FILE *fisier = fopen(numeFisier, "a");
+    if (fisier == NULL) {
+        perror("Eroare la deschiderea fisierului pentru scriere: ");
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(fisier, "%s\n", informatii);
+
+    fclose(fisier);
+}
+
+
+void DirectorSiScrieStatistica(const char *caleDirector) {
+    DIR *director = opendir(caleDirector);
+    struct dirent *intrareDirector;
+
+    if (!director) {
+        perror("Eroare la deschiderea directorului: ");
+        exit(EXIT_FAILURE);
+    }
+
+    while ((intrareDirector = readdir(director)) != NULL) {
+        char caleCurenta[PATH_MAX];
+        snprintf(caleCurenta, sizeof(caleCurenta), "%s/%s", caleDirector, intrareDirector->d_name);
+
+        if (strcmp(intrareDirector->d_name, ".") == 0 || strcmp(intrareDirector->d_name, "..") == 0) {
+            continue; 
+        }
+        struct stat statFisier;
+        if (lstat(caleCurenta, &statFisier) == -1) {
+            perror("Eroare la obtinerea statisticilor fișierului: ");
+            closedir(director);
+            exit(EXIT_FAILURE);
+        }
+
+        char informatii[1000];
+
+        if (S_ISREG(statFisier.st_mode)) {
+            if (strstr(intrareDirector->d_name, ".bmp") != NULL) {
+                data_t data;
+                initializeazaData(&data, caleCurenta);
+                int descriptorImagine = deschideImagine(data.numeFisier);
+                completeazaProprietatiImagine(&data, descriptorImagine);
+                inchideFisier(descriptorImagine);
+                char *formattedData = formatData(data);
+                scrieInformatiiInFisier("statistica.txt", formattedData);
+                free(formattedData);
+            } else {
+                data_t data;
+                initializeazaData(&data, caleCurenta);
+                struct stat statistici;
+                obtineStatisticiImagine(data.numeFisier, &statistici);
+                completeazaDataDinStat(&statistici, &data);
+                char *formattedData = formatData(data);
+                scrieInformatiiInFisier("statistica.txt", formattedData);
+                free(formattedData);
+            }
+        } else if (S_ISDIR(statFisier.st_mode)) {
+            snprintf(informatii, sizeof(informatii), "Nume director: %s\nIdentificatorul utilizatorului: %d\nDrepturi de acces user: RWX\nDrepturi de acces grup: R--\nDrepturi de acces altii: ---\n", intrareDirector->d_name, (int)statFisier.st_uid);
+            scrieInformatiiInFisier("statistica.txt", informatii);
+        } else if (S_ISLNK(statFisier.st_mode)) {
+            snprintf(informatii, sizeof(informatii), "Nume legatura: %s\nDimensiune: %ld\n", intrareDirector->d_name, statFisier.st_size);
+            struct stat statFisierTarget;
+            if (stat(caleCurenta, &statFisierTarget) != -1) {
+                snprintf(informatii + strlen(informatii), sizeof(informatii) - strlen(informatii), "Dimensiune fisier: %ld\n", statFisierTarget.st_size);
+            } else {
+                perror("Eroare la obtinerea statisticilor fiierului țintă pentru legătura simbolica: ");
+            }
+            scrieInformatiiInFisier("statistica.txt", informatii);
+        }
+    }
+    closedir(director);
+}
