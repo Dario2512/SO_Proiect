@@ -1,314 +1,292 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include <dirent.h>
+#include <stdint.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <fcntl.h>
-#include "time.h"
+#include <dirent.h>
+#include <string.h>
+#include <time.h>
+#include <pwd.h>
+#include <grp.h>
 
-typedef struct data_t {
-    char numeFisier[40];
-    int inaltimeImg;
-    int latimeImg;
-    int dimensiuneImg;
-    int idUtilizator;
-    char ultimaModificare[11];
-    int contorLegaturi;
-    char accesUtilizator[4];
-    char accesGrup[4];
-    char accesAltii[4];
-} data_t;
+#define DIMENSIUNE_HEADER_FISIER 14
+#define DIMENSIUNE_HEADER_INFO 40
 
-char *formatData(data_t d);
-void printData(data_t d);
-void inchideFisier(int descriptorFisier);
-void obtineDimensiuniImagine(int descriptorFisier, int *inaltime, int *latime, int *dimensiune);
-int deschideImagine(char *caleFisier);
-void obtineStatisticiImagine(const char *numeFisier, struct stat *buffer);
-char* timespecToData(const struct timespec *ts);
-void mod(mode_t mod, char *str, char cine);
-void obtinePermisiuni(struct stat *statistici, data_t *data);
-void completeazaDataDinStat(struct stat *statistici, data_t *data);
-void completeazaProprietatiImagine(data_t *data, int descriptorImagine);
-void initializeazaData(data_t *data, const char *numeFisier);
-void scrieDataInFisier(const char *numeFisier, const char *data);
+typedef struct {
+    uint16_t signature;
+    uint32_t file_size;
+    uint32_t reserved;
+    uint32_t data_offset;
+    uint32_t size;
+    int32_t width;
+    int32_t height;
+    uint16_t planes;
+    uint16_t bit_count;
+    uint32_t compression;
+    uint32_t image_size;
+    int32_t x_pixels_per_m;
+    int32_t y_pixels_per_m;
+    uint32_t colors_used;
+    uint32_t colors_important;
+} HeaderFisier;
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Utilizare: %s <cale_fisier>\n", argv[0]);
+typedef struct {
+    uint32_t size;           
+    int32_t width;           
+    int32_t height;          
+    uint16_t planes;         
+    uint16_t bit_count;      
+    uint32_t compression;    
+    uint32_t image_size;     
+    int32_t x_pixels_per_m;  
+    int32_t y_pixels_per_m;  
+    uint32_t colors_used;    
+    uint32_t colors_important;  
+} HeaderInfo;
+
+void eroare(const char *msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
+}
+
+void scrieStatistici(const char *nume_fisier, struct stat info, uint32_t idUtilizator, int isSymbolicLink, const char *director_iesire) {
+    char nume_fisier_statistica[512];
+    sprintf(nume_fisier_statistica, "%s/%s_statistica.txt", director_iesire, nume_fisier);
+
+    int fd = open(nume_fisier_statistica, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd == -1) {
+        perror("Eroare la deschiderea fisierului de statistici");
         exit(EXIT_FAILURE);
     }
 
-    data_t data;
-    struct stat statistici;
+    char buffer[1024]; 
+    time_t t = info.st_mtime;
+    struct tm *tm_info = localtime(&t);
+    char timp_str[20];
+    strftime(timp_str, sizeof(timp_str), "%d.%m.%Y", tm_info);
 
-    initializeazaData(&data, argv[1]);
-
-    int descriptorImagine = deschideImagine(data.numeFisier);
-
-    completeazaProprietatiImagine(&data, descriptorImagine);
-    
-    obtineStatisticiImagine(data.numeFisier, &statistici);
-    
-    completeazaDataDinStat(&statistici, &data);
-    
-    inchideFisier(descriptorImagine);
-    
-    char *formattedData = formatData(data);
-    
-    scrieDataInFisier("statistica.txt", formatData(data));
-    
-    free(formattedData);
-
-    return EXIT_SUCCESS;
-}
-
-
-char *formatData(data_t d) {
-    char *buffer = (char *)malloc(200 * sizeof(char));
-    sprintf(buffer, "Nume fisier: %s\nInaltime: %d\nLatime: %d\nDimensiune: %d\nID Utilizator: %d\nUltima modificare: %10s\nContor legaturi: %d\nDrepturi de acces utilizator: %3s\nDrepturi de acces grup: %3s\nDrepturi de acces alti: %3s\n",
-        d.numeFisier,
-        d.inaltimeImg,
-        d.latimeImg,
-        d.dimensiuneImg,
-        d.idUtilizator,
-        d.ultimaModificare,
-        d.contorLegaturi,
-        d.accesUtilizator,
-        d.accesGrup,
-        d.accesAltii
-    );
-    return buffer;
-}
-
-void printData(data_t d) { 
-    printf("%s", formatData(d));
-}
-
-void inchideFisier(int descriptorFisier) {
-    if (close(descriptorFisier) < 0) {
-        perror("Eroare la inchiderea fisierului: ");
-        exit(EXIT_FAILURE);
-    }
-}
-
-void obtineDimensiuniImagine(int descriptorFisier, int *inaltime, int *latime, int *dimensiune) {
-    if(lseek(descriptorFisier, 18, SEEK_SET) < 0) {
-        perror("Eroare mutare cursor fisier: ");
-        exit(EXIT_FAILURE);
-    }
-    
-    if(read(descriptorFisier, latime, 4) < 0) {
-        perror("Eroare citire din fisier: ");
-        exit(EXIT_FAILURE);
+    char permisiuni_user[4] = "-", permisiuni_group[4] = "-", permisiuni_other[4] = "-";
+    if (S_ISDIR(info.st_mode) || S_ISREG(info.st_mode)) {
+        if (info.st_mode & S_IRUSR) permisiuni_user[0] = 'R';
+        if (info.st_mode & S_IWUSR) permisiuni_user[1] = 'W';
+        if (info.st_mode & S_IXUSR) permisiuni_user[2] = 'X';
+        if (info.st_mode & S_IRGRP) permisiuni_group[0] = 'R';
+        if (info.st_mode & S_IWGRP) permisiuni_group[1] = 'W';
+        if (info.st_mode & S_IXGRP) permisiuni_group[2] = 'X';
+        if (info.st_mode & S_IROTH) permisiuni_other[0] = 'R';
+        if (info.st_mode & S_IWOTH) permisiuni_other[1] = 'W';
+        if (info.st_mode & S_IXOTH) permisiuni_other[2] = 'X';
     }
 
-    if(lseek(descriptorFisier, 22, SEEK_SET) < 0) {
-        perror("Eroare mutare cursor fisier: ");
-        exit(EXIT_FAILURE);
-    }
+    if (S_ISREG(info.st_mode)) {
+        if (isSymbolicLink) {
+            struct stat targetInfo;
+            if (lstat(nume_fisier, &targetInfo) == -1) {
+                perror("Eroare la lstat pentru link-ul simbolic");
+                close(fd);
+                exit(EXIT_FAILURE);
+            }
+            sprintf(buffer, "Nume legatura: %s\nDimensiune legatura: %lu\nDimensiune fisier tinta: %lu\nDrepturi de acces user legatura: %s\nDrepturi de acces grup legatura: %s\nDrepturi de acces altii legatura: %s\n\n",
+                    nume_fisier, (unsigned long)info.st_size, (unsigned long)targetInfo.st_size, permisiuni_user, permisiuni_group, permisiuni_other);
+            write(fd, buffer, strlen(buffer));
+        } else if (strstr(nume_fisier, ".bmp") != NULL) {
+            int fdBMP = open(nume_fisier, O_RDONLY);
+            if (fdBMP == -1) {
+                perror("Eroare la deschiderea fisierului BMP");
+                close(fd);
+                exit(EXIT_FAILURE);
+            }
+            HeaderFisier headerFisier;
+            if (read(fdBMP, &headerFisier, DIMENSIUNE_HEADER_FISIER) == DIMENSIUNE_HEADER_FISIER) {
+                if (headerFisier.signature == 0x4D42) { 
+                    HeaderInfo headerInfo;
+                    if (read(fdBMP, &headerInfo, DIMENSIUNE_HEADER_INFO) != DIMENSIUNE_HEADER_INFO) {
+                        perror("Eroare la citirea header-ului INFO");
+                        close(fdBMP);
+                        close(fd);
+                        exit(EXIT_FAILURE);
+                    }
 
-    if(read(descriptorFisier, inaltime, 4) < 0) {
-        perror("Eroare citire din fisier: ");
-        exit(EXIT_FAILURE);
-    }
-
-    if(lseek(descriptorFisier, 2, SEEK_SET) < 0) {
-        perror("Eroare mutare cursor fisier: ");
-        exit(EXIT_FAILURE);
-    }
-    
-    if(read(descriptorFisier, dimensiune, 4) < 0) {
-        perror("Eroare citire din fisier: ");
-        exit(EXIT_FAILURE);
-    }
-}
-
-int deschideImagine(char *caleFisier) {
-    int descriptorImagine = open(caleFisier, O_RDONLY);
-    if (descriptorImagine < 0) {
-        perror("Eroare la deschiderea fisierului: ");
-        exit(EXIT_FAILURE);
-    }
-    return descriptorImagine;
-}
-
-void obtineStatisticiImagine(const char *numeFisier, struct stat *buffer) {
-    if(stat(numeFisier, buffer) < 0) {
-        perror("Eroare obtinere statistici fisier: ");
-        exit(EXIT_FAILURE);
-    }
-}
-
-char* timespecToData(const struct timespec *ts) {
-    char *dataStr = malloc(11); 
-    if (dataStr == NULL) {
-        perror("malloc");
-        return NULL;
-    }
-
-    struct tm lt;
-    if (localtime_r(&(ts->tv_sec), &lt) == NULL) {
-        free(dataStr);
-        return NULL;
-    }
-
-    if (strftime(dataStr, 11, "%d-%m-%Y", &lt) == 0) {
-        fprintf(stderr, "strftime a returnat 0");
-        free(dataStr);
-        return NULL;
-    }
-
-    return dataStr;
-}
-
-void mod(mode_t mod, char *str, char cine) {
-    switch (cine) {
-        case 'u':
-
-            str[0] = (mod & S_IRUSR) ? 'r' : '-';
-            str[1] = (mod & S_IWUSR) ? 'w' : '-';
-            str[2] = (mod & S_IXUSR) ? 'x' : '-';
-            break;
-
-        case 'g':
-
-            str[0] = (mod & S_IRGRP) ? 'r' : '-';
-            str[1] = (mod & S_IWGRP) ? 'w' : '-';
-            str[2] = (mod & S_IXGRP) ? 'x' : '-';
-            break;
-
-        case 'o':
-
-            str[0] = (mod & S_IROTH) ? 'r' : '-';
-            str[1] = (mod & S_IWOTH) ? 'w' : '-';
-            str[2] = (mod & S_IXOTH) ? 'x' : '-';
-            break;
-
-    }
-    str[3] = '\0';
-}
-
-void obtinePermisiuni(struct stat *statistici, data_t *data) {
-    
-    mod(statistici->st_mode, data->accesUtilizator, 'u');
-    mod(statistici->st_mode, data->accesGrup, 'g');
-    mod(statistici->st_mode, data->accesAltii, 'o');
-}
-
-void completeazaDataDinStat(struct stat *statistici, data_t *data) {
-    
-    data->idUtilizator = (int)statistici->st_uid;
-    data->contorLegaturi = (int)statistici->st_nlink;
-    strcpy(data->ultimaModificare, timespecToData(&statistici->st_mtime));
-    obtinePermisiuni(statistici, data);
-}
-
-void completeazaProprietatiImagine(data_t *data, int descriptorImagine) {
-    
-    obtineDimensiuniImagine(descriptorImagine, &data->inaltimeImg, &data->latimeImg, &data->dimensiuneImg);
-}
-
-void initializeazaData(data_t *data, const char *numeFisier) {
-    if (strlen(numeFisier) >= sizeof(data->numeFisier)) {
-        fprintf(stderr, "Nume fisier prea lung.\n");
-        exit(EXIT_FAILURE);
-    }
-    strcpy(data->numeFisier, numeFisier);
-}
-
-void scrieDataInFisier(const char *numeFisier, const char *data) {
-    
-    int fd = open(numeFisier, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    
-    if (fd < 0) {
-        perror("Eroare la deschiderea fisierului de statistici: ");
-        exit(EXIT_FAILURE);
-    }
-
-    if (write(fd, data, strlen(data)) < 0) {
-        perror("Eroare la scrierea in fisierul de statistici: ");
-        close(fd); 
-        exit(EXIT_FAILURE);
-    }
-    close(fd);
-}
-
-void scrieInformatiiInFisier(const char *numeFisier, const char *informatii) {
-    FILE *fisier = fopen(numeFisier, "a");
-    if (fisier == NULL) {
-        perror("Eroare la deschiderea fisierului pentru scriere: ");
-        exit(EXIT_FAILURE);
-    }
-
-    fprintf(fisier, "%s\n", informatii);
-
-    fclose(fisier);
-}
-
-/*saptamana 7*/
-
-
-void DirectorSiScrieStatistica(const char *caleDirector) {
-    DIR *director = opendir(caleDirector);
-    struct dirent *intrareDirector;
-
-    if (!director) {
-        perror("Eroare la deschiderea directorului: ");
-        exit(EXIT_FAILURE);
-    }
-
-    while ((intrareDirector = readdir(director)) != NULL) {
-        char caleCurenta[PATH_MAX];
-        snprintf(caleCurenta, sizeof(caleCurenta), "%s/%s", caleDirector, intrareDirector->d_name);
-
-        if (strcmp(intrareDirector->d_name, ".") == 0 || strcmp(intrareDirector->d_name, "..") == 0) {
-            continue; 
+                    sprintf(buffer, "Nume fisier: %s\nInaltime: %d\nLatime: %d\nDimensiune: %lu\nIdentificator utilizator: %u\nTimp ultimei modificari: %s\nContor legaturi: %lu\nDrepturi de acces user: %s\nDrepturi de acces grup: %s\nDrepturi de acces altii: %s\n\n",
+                            nume_fisier, headerInfo.height, headerInfo.width, (unsigned long)info.st_size, idUtilizator, timp_str, info.st_nlink, permisiuni_user, permisiuni_group, permisiuni_other);
+                    write(fd, buffer, strlen(buffer));
+                } else {
+                    printf("Fisierul nu este un BMP valid.\n");
+                }
+            }
+            close(fdBMP);
+        } else {
+            sprintf(buffer, "Nume fisier: %s\nDimensiune: %lu\nIdentificator utilizator: %u\nTimp ultimei modificări: %s\nContor legaturi: %lu\nDrepturi de acces user: %s\nDrepturi de acces grup: %s\nDrepturi de acces altii: %s\n\n",
+                    nume_fisier, (unsigned long)info.st_size, idUtilizator, timp_str, info.st_nlink, permisiuni_user, permisiuni_group, permisiuni_other);
+            write(fd, buffer, strlen(buffer));
         }
-        struct stat statFisier;
-        if (lstat(caleCurenta, &statFisier) == -1) {
-            perror("Eroare la obtinerea statisticilor fișierului: ");
-            closedir(director);
+    } else if (S_ISLNK(info.st_mode)) {
+        char target_path[1024]; 
+        ssize_t len = readlink(nume_fisier, target_path, sizeof(target_path) - 1);
+        if (len == -1) {
+            perror("Eroare la citirea link-ului simbolic");
+            close(fd);
+            exit(EXIT_FAILURE);
+        }
+        target_path[len] = '\0'; 
+
+        struct stat targetInfo;
+        if (lstat(target_path, &targetInfo) == -1) {
+            perror("Eroare la lstat pentru fisierul target");
+            close(fd);
             exit(EXIT_FAILURE);
         }
 
-        char informatii[1000];
+    
+        sprintf(buffer, "Nume legatura: %s\nDimensiune legatura: %lu\nDimensiune fisier tinta: %lu\nDrepturi de acces user legatura: %s\nDrepturi de acces grup legatura: %s\nDrepturi de acces altii legatura: %s\n\n",
+                nume_fisier, (unsigned long)info.st_size, (unsigned long)targetInfo.st_size, permisiuni_user, permisiuni_group, permisiuni_other);
+        write(fd, buffer, strlen(buffer));
+    } else if (S_ISDIR(info.st_mode)) {
+        sprintf(buffer, "Nume director: %s\nIdentificator utilizator: %u\nDrepturi de acces user: %s\nDrepturi de acces grup: %s\nDrepturi de acces altii: %s\n\n",
+                nume_fisier, idUtilizator, permisiuni_user, permisiuni_group, permisiuni_other);
+        write(fd, buffer, strlen(buffer));
+    }
 
-        if (S_ISREG(statFisier.st_mode)) {
-            if (strstr(intrareDirector->d_name, ".bmp") != NULL) {
-                data_t data;
-                initializeazaData(&data, caleCurenta);
-                int descriptorImagine = deschideImagine(data.numeFisier);
-                completeazaProprietatiImagine(&data, descriptorImagine);
-                inchideFisier(descriptorImagine);
-                char *formattedData = formatData(data);
-                scrieInformatiiInFisier("statistica.txt", formattedData);
-                free(formattedData);
-            } else {
-                data_t data;
-                initializeazaData(&data, caleCurenta);
-                struct stat statistici;
-                obtineStatisticiImagine(data.numeFisier, &statistici);
-                completeazaDataDinStat(&statistici, &data);
-                char *formattedData = formatData(data);
-                scrieInformatiiInFisier("statistica.txt", formattedData);
-                free(formattedData);
+    if (close(fd) == -1) {
+        perror("Eroare la închiderea fisierului de statistici");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void conversieGriBMP(const char *nume_fisier, const char *director_iesire) {
+    int fdBMP = open(nume_fisier, O_RDWR);
+    if (fdBMP == -1) {
+        perror("Eroare la deschiderea fisierului BMP");
+        return;
+    }
+
+    HeaderFisier headerFisier;
+    if (read(fdBMP, &headerFisier, DIMENSIUNE_HEADER_FISIER) != DIMENSIUNE_HEADER_FISIER) {
+        perror("Eroare la citirea header-ului fisierului BMP");
+        close(fdBMP);
+        return;
+    }
+
+    if (headerFisier.signature != 0x4D42) {
+        printf("Fisierul nu este un BMP valid.\n");
+        close(fdBMP);
+        return;
+    }
+
+    HeaderInfo headerInfo;
+    if (read(fdBMP, &headerInfo, DIMENSIUNE_HEADER_INFO) != DIMENSIUNE_HEADER_INFO) {
+        perror("Eroare la citirea header-ului INFO");
+        close(fdBMP);
+        return;
+    }
+
+    int32_t width = headerInfo.width;
+    int32_t height = headerInfo.height;
+
+    for (int i = 0; i < height; ++i) {
+        for (int j = 0; j < width; ++j) {
+            unsigned char pixel[3];
+            if (read(fdBMP, pixel, 3) != 3) {
+                perror("Eroare la citirea pixelilor");
+                close(fdBMP);
+                return;
             }
-        } else if (S_ISDIR(statFisier.st_mode)) {
-            snprintf(informatii, sizeof(informatii), "Nume director: %s\nIdentificatorul utilizatorului: %d\nDrepturi de acces user: RWX\nDrepturi de acces grup: R--\nDrepturi de acces altii: ---\n", intrareDirector->d_name, (int)statFisier.st_uid);
-            scrieInformatiiInFisier("statistica.txt", informatii);
-        } else if (S_ISLNK(statFisier.st_mode)) {
-            snprintf(informatii, sizeof(informatii), "Nume legatura: %s\nDimensiune: %ld\n", intrareDirector->d_name, statFisier.st_size);
-            struct stat statFisierTarget;
-            if (stat(caleCurenta, &statFisierTarget) != -1) {
-                snprintf(informatii + strlen(informatii), sizeof(informatii) - strlen(informatii), "Dimensiune fisier: %ld\n", statFisierTarget.st_size);
-            } else {
-                perror("Eroare la obtinerea statisticilor fiierului țintă pentru legătura simbolica: ");
-            }
-            scrieInformatiiInFisier("statistica.txt", informatii);
+
+            unsigned char pixelGri = 0.299 * pixel[2] + 0.587 * pixel[1] + 0.114 * pixel[0];
+            lseek(fdBMP, -3, SEEK_CUR);
+            write(fdBMP, &pixelGri, 1);
+            write(fdBMP, &pixelGri, 1);
+            write(fdBMP, &pixelGri, 1);
         }
     }
-    closedir(director);
+
+    close(fdBMP);
+
+    struct stat info;
+    if (lstat(nume_fisier, &info) == -1) {
+        perror("Eroare la obtinerea informatiilor despre fisier");
+        return;
+    }
+
+    uint32_t idUtilizator = info.st_uid;
+    int isSymbolicLink = S_ISLNK(info.st_mode);
+    scrieStatistici(nume_fisier, info, idUtilizator, isSymbolicLink, director_iesire);
+}
+
+
+void proceseazaDirector(const char *director_intrare, const char *director_iesire) {
+    DIR *dir = opendir(director_intrare);
+    if (dir == NULL) {
+        perror("Eroare la deschiderea directorului de intrare");
+        return;
+    }
+
+    struct dirent *intrare;
+    while ((intrare = readdir(dir)) != NULL) {
+        if (strcmp(intrare->d_name, ".") != 0 && strcmp(intrare->d_name, "..") != 0) {
+            char path_intrare[512];
+            sprintf(path_intrare, "%s/%s", director_intrare, intrare->d_name);
+
+            struct stat info;
+            if (lstat(path_intrare, &info) == -1) {
+                perror("Eroare la obtinerea informatiilor despre intrare");
+                continue;
+            }
+
+            uint32_t idUtilizator = info.st_uid;
+            int isSymbolicLink = S_ISLNK(info.st_mode);
+
+            if (S_ISREG(info.st_mode)) {
+                if (strstr(intrare->d_name, ".bmp") != NULL) {
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        conversieGriBMP(path_intrare, director_iesire);
+                        exit(EXIT_SUCCESS);
+                    } else if (pid < 0) {
+                        perror("Eroare la fork");
+                        continue;
+                    }
+                } else {
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        scrieStatistici(path_intrare, info, idUtilizator, isSymbolicLink, director_iesire);
+                        exit(EXIT_SUCCESS);
+                    } else if (pid < 0) {
+                        perror("Eroare la fork");
+                        continue;
+                    }
+                }
+            } else if (S_ISDIR(info.st_mode)) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    char path_iesire[512];
+                    sprintf(path_iesire, "%s/%s", director_iesire, intrare->d_name);
+                    mkdir(path_iesire, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+                    proceseazaDirector(path_intrare, path_iesire);
+                    exit(EXIT_SUCCESS);
+                } else if (pid < 0) {
+                    perror("Eroare la fork");
+                    continue;
+                }
+            }
+        }
+    }
+
+    closedir(dir);
+}
+
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Utilizare: %s <director_intrare> <director_iesire>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    const char *director_intrare = argv[1];
+    const char *director_iesire = argv[2];
+    proceseazaDirector(director_intrare, director_iesire);
+
+    return EXIT_SUCCESS;
 }
