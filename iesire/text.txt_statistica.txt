@@ -1,0 +1,8 @@
+Nume fisier: text.txt
+Dimensiune fisier: 57
+No of hard links: 1
+User ID of owner: 1000
+Most recent modify time: 2023-12-09 15:01:30
+User access rights: RW-
+Group access rights: R--
+Other access rights: R--

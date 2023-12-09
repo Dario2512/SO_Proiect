@@ -1,0 +1,8 @@
+Nume fisier: Cat03.jpg
+Dimensiune fisier: 34939
+No of hard links: 1
+User ID of owner: 1000
+Most recent modify time: 2023-11-24 15:49:11
+User access rights: RW-
+Group access rights: R--
+Other access rights: R--

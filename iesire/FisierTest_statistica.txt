@@ -1,0 +1,5 @@
+Nume director: FisierTest
+Identificatorul utilizatorului: dario
+User access rights: RWX
+Group access rights: R-X
+Other access rights: R-X

@@ -1,0 +1,10 @@
+Nume fisier: imagine.bmp
+Inaltime: 1280
+Latime: 1920
+Dimensiune: 7372938
+Identificator utilizator: 1000
+Timpul ultimei modificari: 2023-12-09 15:16:10
+Contorul de legaturi: 1
+Drepturi de acces user: RWX
+Drepturi de acces grup: R--
+Drepturi de acces altii: R--

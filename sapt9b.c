@@ -191,11 +191,28 @@ void process_bmp_file(const char *input_full_path, const char *output_dir) {
     close(stat_file);
 }
 
+void count_valid_sentences(int input_pipe) {
+    char buffer[PATH_MAX];
+    ssize_t bytes_read;
+    int total_sentences = 0;
+
+    while ((bytes_read = read(input_pipe, buffer, sizeof(buffer))) > 0) {
+        buffer[bytes_read] = '\0';
+
+        int current_sentences;
+        if (sscanf(buffer, "%d", &current_sentences) == 1) {
+            total_sentences += current_sentences;
+        }
+    }
+
+    printf("Au fost identificate in total %d propozitii corecte.\n", total_sentences);
+}
+
 void process_regular_file(const char *input_full_path, const struct stat *buffer, const char *entry_name, const char *output_dir) {
     char output_file_path[PATH_MAX];
     snprintf(output_file_path, sizeof(output_file_path), "%s/%s_statistica.txt", output_dir, entry_name);
 
-    int output_file = open(output_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int output_file = open(output_file_path, O_WRONLY | O_CREAT | O_TRUNC);
     if (output_file == -1) {
         perror("open");
         exit(EXIT_FAILURE);
@@ -330,8 +347,8 @@ void process_directory(const char *input_full_path, const struct stat *buffer, c
 
     close(output_file);
 }
-
-void process_entry(const char *input_path, const struct dirent *entry, const char *output_dir) {
+/*
+void process_entry(const char *input_path, const struct dirent *entry, const char *output_dir, const char *character, int pipeFd[2]) {
     char input_full_path[PATH_MAX];
     int status;
     snprintf(input_full_path, sizeof(input_full_path), "%s/%s", input_path, entry->d_name);
@@ -343,81 +360,119 @@ void process_entry(const char *input_path, const struct dirent *entry, const cha
     }
  
     if (S_ISREG(buffer.st_mode)) {
-        if (strstr(entry->d_name, ".bmp") != NULL) {
-            pid_t bmp_copil_pid = fork();
-            if(bmp_copil_pid == 0){
+        if (strlen(entry->d_name) > 4 && strcmp(entry->d_name + strlen(entry->d_name) - 4, ".bmp") == 0) {
+            pid_t bmp_child_pid = fork();
+            if (bmp_child_pid == 0) {
                 convert_to_grayscale(input_full_path);
                 process_bmp_file(input_full_path, output_dir);
                 exit(EXIT_SUCCESS);
-            }
-            else if(bmp_copil_pid < 0){
+            } else if (bmp_child_pid < 0) {
                 perror("fork");
                 exit(EXIT_FAILURE);
             }
-        waitpid(bmp_copil_pid, &status, 0);
-        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_copil_pid, WEXITSTATUS(status));
-        
+            waitpid(bmp_child_pid, &status, 0);
+            printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_child_pid, WEXITSTATUS(status));
         } else {
-            pid_t bmp_copil_pid = fork();
-            if(bmp_copil_pid == 0){
-                process_regular_file(input_full_path, &buffer, entry->d_name, output_dir);
+            pid_t child_pid = fork();
+            if (child_pid == 0) {
+                char cmd[100];
+                snprintf(cmd, sizeof(cmd), "bash script.sh %c", character[0]);
+                FILE *script_output = popen(cmd, "r");
+                if (script_output == NULL) {
+                    perror("popen");
+                    exit(EXIT_FAILURE);
+                }
+
+                char line[256];
+                int local_correct_sentences = 0;
+                while (fgets(line, sizeof(line), script_output)) {
+                    local_correct_sentences++;
+                }
+
+                pclose(script_output);
+
+                close(pipeFd[0]);
+                write(pipeFd[1], &local_correct_sentences, sizeof(int));
+                close(pipeFd[1]);
+
                 exit(EXIT_SUCCESS);
-            }
-            else if(bmp_copil_pid < 0){
+            } else if (child_pid < 0) {
                 perror("fork");
                 exit(EXIT_FAILURE);
+            } else {
+                waitpid(child_pid, &status, 0);
+                if (WIFEXITED(status)) {
+                    int local_result;
+                    close(pipeFd[1]);
+                    read(pipeFd[0], &local_result, sizeof(int));
+                    close(pipeFd[0]);
+
+                    printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", child_pid, WEXITSTATUS(status));
+
+                    int local_correct_sentences = local_result; 
+                    
+                }
             }
-        waitpid(bmp_copil_pid, &status, 0);
-        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_copil_pid, WEXITSTATUS(status));
         }
     } else if (S_ISLNK(buffer.st_mode)) {
-        pid_t bmp_copil_pid = fork();
-        if(bmp_copil_pid == 0){
+        pid_t bmp_child_pid = fork();
+        if (bmp_child_pid == 0) {
             process_symbolic_link(input_full_path, &buffer, entry->d_name, output_dir);
             exit(EXIT_SUCCESS);
-        }
-        else if(bmp_copil_pid < 0){
+        } else if (bmp_child_pid < 0) {
             perror("fork");
             exit(EXIT_FAILURE);
         }
-        waitpid(bmp_copil_pid, &status, 0);
-        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_copil_pid, WEXITSTATUS(status));
+        waitpid(bmp_child_pid, &status, 0);
+        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_child_pid, WEXITSTATUS(status));
     } else if (S_ISDIR(buffer.st_mode)) {
-        pid_t bmp_copil_pid = fork();
-        if(bmp_copil_pid == 0){
+        pid_t bmp_child_pid = fork();
+        if (bmp_child_pid == 0) {
             process_directory(input_full_path, &buffer, entry->d_name, output_dir);
             exit(EXIT_SUCCESS);
-        }
-        else if(bmp_copil_pid < 0){
+        } else if (bmp_child_pid < 0) {
             perror("fork");
             exit(EXIT_FAILURE);
         }
-        waitpid(bmp_copil_pid, &status, 0);
-        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_copil_pid, WEXITSTATUS(status));
+        waitpid(bmp_child_pid, &status, 0);
+        printf("S-a incheiat procesul cu pid-ul %d si codul %d\n", bmp_child_pid, WEXITSTATUS(status));
     }
 }
+*/
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <director_intrare> <director_iesire>\n", argv[0]);
+if (argc != 4) {
+        fprintf(stderr, "Usage: %s <director_intrare> <director_iesire> <caracter>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    DIR *dir = opendir(argv[1]);
+    const char *input_dir = argv[1];
+    const char *output_dir = argv[2];
+    const char *character = argv[3];
+
+    DIR *dir = opendir(input_dir);
     if (dir == NULL) {
         perror("opendir");
+        exit(EXIT_FAILURE);
+    }
+
+    int pipeFd[2];
+    if (pipe(pipeFd) == -1) {
+        perror("pipe");
         exit(EXIT_FAILURE);
     }
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            process_entry(argv[1], entry, argv[2]);
+            process_entry(input_dir, entry, output_dir, character, pipeFd);
         }
     }
 
     closedir(dir);
 
+    close(pipeFd[0]);
+    close(pipeFd[1]);
+
     return 0;
 }
-

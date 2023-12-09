@@ -1,18 +1,23 @@
 #!/bin/bash
 
 if [ "$#" -ne 1 ]; then
-    echo "Utilizare: $0 <c>"
+    echo "Utilizare: bash $0 <character>"
     exit 1
 fi
 
-contor=0
-caracter=$1
+character=$1
+counter=0
 
-while IFS= read -r line
-do
-    if [[ $line =~ ^[[:upper:]][[:alnum:][:space:],.!?]*[[:upper:]]*[.!?]$ && ! $line =~ ,\s*și ]]; then
-        contor=$((contor+1))
+function is_valid() {
+    local line=$1
+    [[ $line =~ ^[A-Z] ]] && [[ $line =~ [a-zA-Z0-9\ \!\?\.]+$ ]] &&       
+    [[ $line =~ (\.|\!|\?)$ ]] && [[ ! $line =~ ,\ și ]] &&                      
+    [[ $line == *"$character"* ]]                   
+}
+while IFS= read -r line || [[ -n "$line" ]]; do
+    if is_valid "$line"; then
+        ((counter++))
     fi
 done
 
-echo "$contor"
+echo "$counter"
